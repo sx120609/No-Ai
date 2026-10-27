@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>后台 · 去AI味</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23141414'/%3E%3Ctext x='16' y='22' font-size='14' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23fff'%3EAI%3C/text%3E%3Cpath d='M5 20 L27 12' stroke='%23cf2e1d' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css?v=5">
+  <script>try { const t = localStorage.getItem('noai.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
+</head>
+<body class="admin">
+  <div class="shell">
+    <header class="bar">
+      <a class="logo" href="/">去<s>AI</s>味</a>
+      <span class="muted">后台</span>
+      <nav class="admin-nav hidden" id="nav">
+        <button data-v="models" class="on">模型</button>
+        <button data-v="keys">访问密钥</button>
+        <button data-v="usage">用量</button>
+      </nav>
+      <div class="bar-right">
+        <button id="theme" class="textbtn">深色</button>
+        <a class="textbtn" href="/">回前台</a>
+        <button id="logout" class="textbtn hidden">退出</button>
+      </div>
+    </header>
+
+    <section id="login" class="login-card hidden">
+      <h2>管理员登录</h2>
+      <input id="token" type="password" placeholder="管理员令牌" autocomplete="off">
+      <button id="doLogin" class="btn primary">进入</button>
+      <div class="muted small">令牌在服务首次启动时打印在日志里，也可以用 ADMIN_TOKEN 环境变量指定。</div>
+      <div id="loginErr" class="notice bad hidden"></div>
+    </section>
+
+    <main id="app" class="admin-main hidden">
+      <div id="v-models">
+        <section class="section">
+          <div class="section-head">
+            <h2>供应商</h2>
+            <span class="muted small">OpenAI 兼容接口（各类中转、DeepSeek、通义、Kimi、智谱、Ollama）、Anthropic、Gemini</span>
+            <span class="grow"></span>
+            <select id="preset" aria-label="从预设添加"></select>
+            <button id="addProv" class="btn small">添加</button>
+          </div>
+          <div id="providers"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>改写用的模型</h2>
+            <span class="muted small">配多个会各出一稿，按检查结果挑；某个调用失败会换下一个</span>
+            <span class="grow"></span>
+            <button id="addRw" class="btn small">添加</button>
+          </div>
+          <div id="rewriters"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>核对事实用的模型</h2>
+            <span class="muted small">可选。最好和改写模型不是同一家</span>
+            <span class="grow"></span>
+            <label class="check"><input type="checkbox" id="judgeOn">启用</label>
+          </div>
+          <div id="judge"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-head"><h2>默认值</h2></div>
+          <div class="form-row">
+            <label class="field"><span>场景</span><select id="dMode"></select></label>
+            <label class="field"><span>改动</span><select id="dStrength"><option value="light">小改</option><option value="medium">中改</option><option value="deep">重写</option></select></label>
+            <label class="field"><span>最多返工几次</span><input id="dRounds" type="number" min="0" max="3" style="width:72px"></label>
+            <label class="check"><input type="checkbox" id="dSemantic">默认核对事实</label>
+          </div>
+        </section>
+
+        <div class="form-row" style="padding:20px 0">
+          <button id="save" class="btn primary">保存</button>
+          <span id="saveMsg" class="small"></span>
+        </div>
+      </div>
+
+      <div id="v-keys" class="hidden">
+        <section class="section">
+          <div class="section-head"><h2>新建访问密钥</h2></div>
+          <div class="form-row">
+            <input id="kName" type="text" placeholder="给谁用，比如：客户A">
+            <label class="field"><span>每天最多处理（字，0 不限）</span><input id="kDaily" type="number" min="0" value="0" style="width:110px"></label>
+            <button id="kCreate" class="btn primary">生成</button>
+          </div>
+          <div id="kNew" class="hidden" style="margin-top:14px"></div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>已有密钥</h2></div>
+          <div class="table-wrap"><table class="kv" id="keys"></table></div>
+        </section>
+      </div>
+
+      <div id="v-usage" class="hidden">
+        <section class="section">
+          <div class="section-head"><h2>最近 14 天</h2><span id="live" class="muted small mono"></span><span class="grow"></span><button id="refresh" class="btn small">刷新</button></div>
+          <div class="bars" id="bars"></div>
+          <div class="table-wrap"><table class="kv" id="usage"></table></div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>最近任务</h2><span class="muted small">默认不存正文，只存统计</span></div>
+          <div class="table-wrap"><table class="kv" id="jobs"></table></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <datalist id="effortList"><option value="low"><option value="medium"><option value="high"><option value="xhigh"><option value="max"></datalist>
+  <script src="/admin.js?v=5" type="module"></script>
+</body>
+</html>

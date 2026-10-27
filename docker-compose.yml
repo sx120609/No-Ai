@@ -1,0 +1,14 @@
+services:
+  no-ai:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"   # 只暴露给本机，由 nginx/Caddy 做 HTTPS 反代
+    env_file: .env
+    environment:
+      TRUST_PROXY: "1"
+    volumes:
+      - no-ai-data:/data
+
+volumes:
+  no-ai-data:
