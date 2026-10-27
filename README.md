@@ -89,6 +89,14 @@ location / {
 }
 ```
 
+### 宝塔 / 普通 Linux 服务器
+
+```bash
+bash deploy/install.sh /path/to/no-ai-<sha>.tar.gz
+```
+
+脚本会校验发布包、在 `/opt/no-ai/node` 装独立 Node、首次生成 `/opt/no-ai/.env` 和管理员令牌、建 `no-ai.service`（只监听 127.0.0.1:23360），重复运行即升级。然后在宝塔里建站点并反向代理到 `http://127.0.0.1:23360`，代理配置里加 `proxy_read_timeout 600s; proxy_buffering off;`。
+
 ### 主要环境变量
 
 | 变量 | 默认 | 说明 |
@@ -101,7 +109,7 @@ location / {
 | `OPEN_DAILY_CHARS` | 20000 | open 模式下每个 IP 每日字数 |
 | `MAX_CONCURRENT` / `MAX_QUEUE` | 4 / 20 | 并发与排队上限 |
 | `STORE_RESULTS_HOURS` | 0 | 保存改写正文的小时数，0 只留统计 |
-| `TRUST_PROXY` | `0` | 反代后面设为 1，按 X-Forwarded-For 识别 IP |
+| `TRUST_PROXY` | `0` | 反代后面设为 1，按 X-Real-IP（或 X-Forwarded-For 最后一段）识别 IP |
 
 ## API
 

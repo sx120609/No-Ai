@@ -381,7 +381,10 @@ const label = (b: ModelBinding) => b.label || `${b.provider}/${b.model}`;
 
 function clientIp(req: IncomingMessage, trustProxy: boolean): string {
   if (trustProxy) {
-    const xff = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
+    // X-Real-IP 由反代直接设置；X-Forwarded-For 的第一段客户端可以伪造，只取最后一段（反代追加的）
+    const real = (req.headers['x-real-ip'] as string | undefined)?.trim();
+    if (real) return real;
+    const xff = (req.headers['x-forwarded-for'] as string | undefined)?.split(',').at(-1)?.trim();
     if (xff) return xff;
   }
   return req.socket.remoteAddress ?? 'unknown';
