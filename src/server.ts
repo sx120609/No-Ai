@@ -10,7 +10,7 @@ import { detect } from './detect/index.ts';
 import { batchDiversity } from './pipeline/batch.ts';
 import { runPipeline, type PipelineDeps } from './pipeline/index.ts';
 import { MODES } from './pipeline/prompts.ts';
-import { assertPublicBaseUrl, createClient, PROVIDER_PRESETS, ProviderError } from './providers/index.ts';
+import { assertPublicBaseUrl, createClient, listUpstreamModels, PROVIDER_PRESETS, ProviderError } from './providers/index.ts';
 import { hashKey, Store, type Settings } from './store.ts';
 import * as cputime from './cputime.ts';
 import type { LLMClient, Mode, ModelBinding, ProviderConfig, RewriteOptions, RewriteResult, Strength } from './types.ts';
@@ -202,6 +202,9 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
         { id: 'deep', name: '重写', desc: '只保留事实，从头重新组织表达' },
       ],
       rewriters: settings.rewriters.map(label),
+      efforts: [
+        { id: '', name: '默认' }, { id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }, { id: 'xhigh', name: '极高' },
+      ],
       judge: !!settings.judge,
       auth: cpuOn ? { provider: 'cputime', name: '药大拾间', loginUrl: '/auth/login' } : null,
       defaults: settings.defaults,
@@ -218,15 +221,14 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       Array.isArray(v) ? v.map(String).map((s) => s.slice(0, maxLen)).filter((s) => s.trim()).slice(0, max) : undefined;
 
     const uid = cpuUserId(c?.userId ?? null);
-    const usesCpu = [...settings.rewriters, ...(settings.judge ? [settings.judge] : [])]
-      .some((b) => settings.providers.find((p) => p.id === b.provider)?.type === 'cputime');
-    if (usesCpu && uid === null && !c?.admin && !c?.keyId) throw new HttpError(401, '请先用药大拾间账号登录');
+    if (config.accessMode === 'cpu' && uid === null && !c?.admin && !c?.keyId) throw new HttpError(401, '请先用药大拾间账号登录');
     let deps: PipelineDeps = {
       client: (id) => {
         const p = providerFor(id);
-        if (p.type !== 'cputime') return clientFor(id);
-        if (!cpuOn) throw new HttpError(503, '药大拾间集成未配置');
-        const inner = cputime.createCputimeClient(p, cpu, uid ?? undefined);
+        if (p.type === 'cputime' && !cpuOn) throw new HttpError(503, '药大拾间集成未配置');
+        const inner = p.type === 'cputime' ? cputime.createCputimeClient(p, cpu, uid ?? undefined) : clientFor(id);
+        if (p.type === 'mock') return inner;
+        // 不管用哪个模型，药大拾间登录的用户都按拾间 AI 额度计次（一次任务扣一次）
         return { provider: p, chat: async (r) => { await ticket?.ensure(); return inner.chat(r); } };
       },
       rewriters: settings.rewriters,
@@ -250,9 +252,12 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
     }
 
     let rewriters: ModelBinding[] | undefined;
-    if (!byo && Array.isArray(o.models) && o.models.length) {
-      rewriters = settings.rewriters.filter((b) => o.models.includes(label(b)));
-      if (!rewriters.length) throw new HttpError(400, '选择的模型不存在');
+    if (!byo) {
+      const wanted = typeof o.model === 'string' ? [o.model] : Array.isArray(o.models) ? o.models.map(String) : [];
+      rewriters = wanted.length ? settings.rewriters.filter((b) => wanted.includes(label(b))) : settings.rewriters.slice(0, 1);
+      if (!rewriters.length) throw new HttpError(400, '选择的模型不存在或已下线');
+      const effort = typeof o.effort === 'string' && EFFORTS.includes(o.effort) ? o.effort : null;
+      if (effort) rewriters = rewriters.map((b) => ({ ...b, effort }));
     }
 
     const d = settings.defaults;
@@ -377,6 +382,14 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       store.saveSettings(settings);
       clients = new Map();
       return sendJson(res, 200, { settings: maskSettings(settings) });
+    }
+    if (path === '/models' && req.method === 'POST') {
+      const body = await readJson(req);
+      try {
+        return sendJson(res, 200, { ok: true, models: await listUpstreamModels(providerFor(String(body.provider))) });
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: (e as Error).message });
+      }
     }
     if (path === '/test' && req.method === 'POST') {
       const body = await readJson(req);
@@ -540,6 +553,7 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 }
 
 const label = (b: ModelBinding) => b.label || `${b.provider}/${b.model}`;
+const EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 
 function clientIp(req: IncomingMessage, trustProxy: boolean): string {
   if (trustProxy) {

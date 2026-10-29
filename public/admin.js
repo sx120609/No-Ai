@@ -89,7 +89,7 @@ function renderProviders() {
     box.append(el('div', { class: 'prov' },
       el('label', {}, 'ID', el('input', { type: 'text', value: p.id, oninput: bind('id') })),
       el('label', {}, '名称', el('input', { type: 'text', value: p.name ?? '', oninput: bind('name') })),
-      el('label', {}, '类型', el('select', { onchange: bind('type') }, ['openai', 'anthropic', 'gemini', 'mock'].map((t) => el('option', { value: t, text: { openai: 'OpenAI 兼容', anthropic: 'Anthropic', gemini: 'Gemini 原生', mock: '离线演示' }[t], selected: p.type === t ? '' : null })))),
+      el('label', {}, '类型', el('select', { onchange: bind('type') }, ['openai', 'anthropic', 'gemini', 'cputime', 'mock'].map((t) => el('option', { value: t, text: { openai: 'OpenAI 兼容', anthropic: 'Anthropic', gemini: 'Gemini 原生', cputime: '药大拾间 AI', mock: '离线演示' }[t], selected: p.type === t ? '' : null })))),
       el('label', {}, '启用', el('input', { type: 'checkbox', checked: p.enabled !== false, onchange: bind('enabled') })),
       el('label', { class: 'wide' }, 'Base URL', el('input', { type: 'text', value: p.baseUrl ?? '', placeholder: p.type === 'openai' ? 'https://…/v1' : '留空使用官方地址', oninput: bind('baseUrl') })),
       el('label', {}, 'API Key', el('input', { type: 'password', value: p.apiKey ?? '', placeholder: '直接填写（只存在服务端）', autocomplete: 'off', oninput: bind('apiKey') })),
@@ -109,9 +109,29 @@ function renderProviders() {
           } catch (e) { testOut.textContent = e.message; }
         } }),
         testOut,
+        ['openai', 'anthropic', 'gemini'].includes(p.type) ? el('button', { class: 'btn small', text: '拉取模型', title: '用已保存的 Key 读取上游可用模型', onclick: async () => {
+          testOut.textContent = '读取中…（需先保存配置）';
+          testOut.className = 'small muted';
+          try {
+            const r = await api('/models', 'POST', { provider: p.id });
+            if (!r.ok) { testOut.textContent = `✗ ${r.error}`; testOut.className = 'small lv-high'; return; }
+            p.models = r.models;
+            renderAll();
+          } catch (e) { testOut.textContent = e.message; }
+        } }) : null,
         el('span', { style: 'flex:1' }),
         el('button', { class: 'btn small danger', text: '删除', onclick: () => { state.providers.splice(i, 1); renderAll(); } }),
-      )));
+      ),
+      p.models?.length && p.type !== 'mock' ? el('div', { class: 'offer' },
+        el('div', { class: 'muted small', text: '勾选开放给用户选择的模型（第一个开放的是默认模型；保存后生效）' }),
+        el('div', { class: 'checks' }, p.models.map((m) => {
+          const on = state.rewriters.some((b) => b.provider === p.id && b.model === m);
+          return el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: on, onchange: (e) => {
+            if (e.target.checked) state.rewriters.push({ provider: p.id, model: m, label: m });
+            else state.rewriters = state.rewriters.filter((b) => !(b.provider === p.id && b.model === m));
+            renderBindings();
+          } }), m);
+        }))) : null));
   });
 }
 
@@ -147,7 +167,7 @@ $('addProv').addEventListener('click', () => {
   renderAll();
 });
 $('addRw').addEventListener('click', () => {
-  if (state.rewriters.length >= 4) return;
+  if (state.rewriters.length >= 40) return;
   const p = state.providers[0];
   state.rewriters.push({ provider: p?.id ?? '', model: p?.models?.[0] ?? '' });
   renderBindings();

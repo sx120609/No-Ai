@@ -19,6 +19,10 @@ const listen = (s: Server) => new Promise<string>((r) => s.listen(0, '127.0.0.1'
 before(async () => {
   // 假的 OpenAI 兼容上游：把 <source_text> 里的原文去掉套话后返回
   upstream = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(req.headers.authorization === 'Bearer sk-secret-123456789' ? 200 : 401, { 'content-type': 'application/json' });
+      return void res.end(JSON.stringify({ object: 'list', data: [{ id: 'gpt-b' }, { id: 'gpt-a' }, { id: 'gpt-a' }] }));
+    }
     let raw = '';
     for await (const c of req) raw += c;
     const body = JSON.parse(raw);
@@ -143,6 +147,28 @@ test('settings: keys are masked, admin-configured OpenAI-compatible provider is 
   assert.equal(req.body.messages[0].role, 'system');
   assert.ok(!r.json.output.includes('值得注意的是'));
   assert.ok(r.json.usage.calls >= 1);
+});
+
+test('admin pulls upstream models; users pick one model and an effort per job', async () => {
+  const pulled = await call('/api/admin/models', { body: { provider: 'fake' }, token: ADMIN });
+  assert.deepEqual(pulled.json, { ok: true, models: ['gpt-a', 'gpt-b'] });
+  const got = await call('/api/admin/settings', { token: ADMIN });
+  const settings = got.json.settings;
+  settings.rewriters = [{ provider: 'fake', model: 'gpt-a', label: 'gpt-a' }, { provider: 'fake', model: 'gpt-b', label: 'gpt-b' }];
+  assert.equal((await call('/api/admin/settings', { method: 'PUT', token: ADMIN, body: settings })).status, 200);
+  const meta = (await call('/api/meta')).json;
+  assert.deepEqual(meta.rewriters, ['gpt-a', 'gpt-b']);
+  const before = upstreamRequests.length;
+  assert.equal((await call('/api/rewrite', { body: { text: AI_ZH, options: { model: 'gpt-b', effort: 'high', maxRepairRounds: 0 } }, token: ADMIN })).status, 200);
+  const sent = upstreamRequests.slice(before);
+  assert.equal(sent.length, 1, 'only the chosen model runs');
+  assert.equal(sent[0]!.body.model, 'gpt-b');
+  assert.equal(sent[0]!.body.reasoning_effort, 'high');
+  // 没选模型时用第一个，而不是把所有开放的模型都跑一遍
+  const before2 = upstreamRequests.length;
+  await call('/api/rewrite', { body: { text: AI_ZH, options: { maxRepairRounds: 0 } }, token: ADMIN });
+  assert.deepEqual(upstreamRequests.slice(before2).map((r) => r.body.model), ['gpt-a']);
+  assert.equal((await call('/api/rewrite', { body: { text: AI_ZH, options: { model: 'not-offered' } }, token: ADMIN })).status, 400);
 });
 
 test('settings validation rejects bad input', async () => {

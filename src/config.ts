@@ -129,7 +129,7 @@ export function validateSettings(input: unknown, current: Settings): Settings {
   if (!rewriters.length) throw new Error('至少配置一个改写模型');
   return {
     providers,
-    rewriters: rewriters.slice(0, 4),
+    rewriters: rewriters.slice(0, 40),
     judge: s.judge ? binding(s.judge, '审校模型') : null,
     defaults: { ...current.defaults, ...(s.defaults ?? {}) },
   };

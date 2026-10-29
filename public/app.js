@@ -125,11 +125,17 @@ async function init() {
     if (mobile.matches) { $('keyToggle').classList.remove('hidden'); showKeyBox(!store.get('noai.key')); }
     else showKeyBox(true);
   }
-  if (meta.rewriters.length > 1) {
-    $('modelPick').append(
-      el('div', { class: 'muted small', text: '用哪些模型改（选多个会各出一稿，挑最好的）' }),
-      el('div', { class: 'checks', style: 'margin-top:6px' },
-        meta.rewriters.map((r, i) => el('label', { class: 'check' }, el('input', { type: 'checkbox', value: r, class: 'model-cb', checked: i === 0 ? '' : null }), r))));
+  // 模型：后台开放了几个就列几个，记住上次的选择
+  if (meta.rewriters.length) {
+    $('model').replaceChildren(...meta.rewriters.map((r) => el('option', { value: r, text: r })));
+    const savedModel = store.get('noai.model');
+    $('model').value = savedModel && meta.rewriters.includes(savedModel) ? savedModel : meta.rewriters[0];
+    $('modelBox').classList.toggle('hidden', meta.rewriters.length < 2);
+  }
+  if (meta.efforts?.length) {
+    $('effort').replaceChildren(...meta.efforts.map((e) => el('option', { value: e.id, text: e.name })));
+    $('effort').value = store.get('noai.effort') ?? '';
+    $('effortBox').classList.remove('hidden');
   }
   const saved = store.get('noai.draft');
   if (saved) { $('input').value = saved; onInput(); }
@@ -232,7 +238,6 @@ function hidePop() {
 function collectOptions() {
   const lines = (id) => $(id).value.split('\n').map((s) => s.trim()).filter(Boolean);
   const samples = $('samples').value.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-  const models = [...document.querySelectorAll('.model-cb:checked')].map((c) => c.value);
   return {
     mode: $('mode').value,
     strength,
@@ -243,7 +248,8 @@ function collectOptions() {
     keepStructure: $('keepStructure').checked || undefined,
     semanticCheck: $('semantic').checked,
     skipIfClean: !$('force').checked,
-    models: models.length ? models : undefined,
+    model: $('model').value || undefined,
+    effort: $('effort').value || undefined,
   };
 }
 
@@ -520,6 +526,8 @@ function renderInfo(r) {
 $('input').addEventListener('input', onInput);
 $('lang').addEventListener('change', onInput);
 $('mode').addEventListener('change', () => store.set('noai.mode', $('mode').value));
+$('model').addEventListener('change', () => store.set('noai.model', $('model').value));
+$('effort').addEventListener('change', () => store.set('noai.effort', $('effort').value));
 $('run').addEventListener('click', run);
 $('runMobile').addEventListener('click', run);
 $('toggleAdv').addEventListener('click', (e) => {

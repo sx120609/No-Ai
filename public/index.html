@@ -8,7 +8,7 @@
   <title>去AI味</title>
   <meta name="description" content="把文字里的模型腔调改掉，数字和事实一个不丢。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23141414'/%3E%3Ctext x='16' y='22' font-size='14' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23fff'%3EAI%3C/text%3E%3Cpath d='M5 20 L27 12' stroke='%23cf2e1d' stroke-width='3'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/styles.css?v=8">
+  <link rel="stylesheet" href="/styles.css?v=9">
   <script>try { const t = localStorage.getItem('noai.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body data-view="src">
@@ -20,6 +20,8 @@
         <div class="sheet-head-m"><span>设置</span><button class="textbtn" id="sheetClose">关闭</button></div>
         <div class="opt"><label for="mode">场景</label><select id="mode"></select></div>
         <div class="opt"><span class="lbl">改动</span><span class="seg" id="strength" role="radiogroup"></span><span class="seg-desc" id="strengthDesc"></span></div>
+        <div class="opt opt-model hidden" id="modelBox"><label for="model">模型</label><select id="model"></select></div>
+        <div class="opt opt-effort hidden" id="effortBox"><label for="effort">推理</label><select id="effort"></select></div>
         <div class="opt opt-lang"><label for="lang">语言</label>
           <select id="lang"><option value="auto">自动</option><option value="zh">中文</option><option value="en">English</option></select>
         </div>
@@ -39,7 +41,6 @@
             <label class="check"><input type="checkbox" id="semantic">再让另一个模型核对事实</label>
             <label class="check"><input type="checkbox" id="force">原文不像 AI 也照改</label>
           </div>
-          <div class="full" id="modelPick"></div>
         </div>
         <button class="btn primary sheet-done" id="sheetDone">好了</button>
       </div>
@@ -110,6 +111,6 @@
   </div>
   <div class="scrim" id="scrim"></div>
   <div class="popover hidden" id="pop" role="tooltip"></div>
-  <script src="/app.js?v=8" type="module"></script>
+  <script src="/app.js?v=9" type="module"></script>
 </body>
 </html>
