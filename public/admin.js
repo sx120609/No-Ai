@@ -127,7 +127,7 @@ function renderProviders() {
         el('div', { class: 'checks' }, p.models.map((m) => {
           const on = state.rewriters.some((b) => b.provider === p.id && b.model === m);
           return el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: on, onchange: (e) => {
-            if (e.target.checked) state.rewriters.push({ provider: p.id, model: m, label: m });
+            if (e.target.checked) state.rewriters.push({ provider: p.id, model: m, label: m, public: undefined });
             else state.rewriters = state.rewriters.filter((b) => !(b.provider === p.id && b.model === m));
             renderBindings();
           } }), m);
@@ -146,6 +146,7 @@ function bindingRow(b, onRemove) {
     el('label', {}, '显示名（可选）', el('input', { type: 'text', value: b.label ?? '', oninput: (e) => { b.label = e.target.value || undefined; } })),
     el('label', {}, '推理强度', el('input', { type: 'text', value: b.effort ?? '', list: 'effortList', placeholder: '默认', oninput: (e) => { b.effort = e.target.value || undefined; } })),
     el('label', {}, '温度', el('input', { type: 'number', step: '0.05', min: '0', max: '2', value: b.temperature ?? '', placeholder: '默认', title: '部分模型（如新版 Claude）不支持，留空即可', oninput: (e) => { b.temperature = e.target.value === '' ? undefined : Number(e.target.value); } })),
+    onRemove ? el('label', { class: 'check', title: '不勾选时只有管理员和被单独授权的用户能用' }, el('input', { type: 'checkbox', checked: !!b.public, onchange: (e) => { b.public = e.target.checked || undefined; } }), '所有人可用') : el('span'),
     onRemove ? el('button', { class: 'btn small danger', text: '移除', onclick: onRemove }) : el('span'),
   );
 }
@@ -235,22 +236,36 @@ $('kCreate').addEventListener('click', async () => {
 // ---------- 用户 ----------
 
 async function loadUsers() {
-  const { users, defaultDailyChars } = await api('/users');
-  $('usersNote').textContent = `用药大拾间账号登录。每日额度留空或 0 时用默认值（${defaultDailyChars || '不限'} 字）`;
+  const { users, defaultDailyChars, restrictedModels, publicModels } = await api('/users');
+  $('usersNote').textContent = `所有人可用：${publicModels.join('、') || '无'}。管理员可用全部模型。每日字数额度留空或 0 时用默认值（${defaultDailyChars || '不限'}）`;
   const t = $('users');
-  t.replaceChildren(el('tr', {}, ['用户', '身份', '最近登录', '今日已用', '每日额度', '状态', ''].map((h) => el('th', { text: h }))));
+  t.replaceChildren(el('tr', {}, ['用户', '身份', '最近登录', '今日已用', '额外可用模型', '每日额度', '状态', ''].map((h) => el('th', { text: h }))));
   for (const u of users) {
+    const granted = new Set(u.models || []);
+    const boxes = restrictedModels.map((m) => el('label', { class: 'check' }, el('input', { type: 'checkbox', value: m, checked: granted.has(m) }), m));
+    const modelCell = u.role === 'admin'
+      ? el('span', { class: 'muted small', text: '全部' })
+      : restrictedModels.length
+        ? el('details', { class: 'grant' },
+            el('summary', { text: granted.size ? `${granted.size} 个` : '无' }),
+            el('div', { class: 'checks' }, boxes),
+            el('button', { class: 'btn small', text: '保存', onclick: async () => {
+              await api(`/users/${encodeURIComponent(u.id)}`, 'PATCH', { models: boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value) });
+              loadUsers();
+            } }))
+        : el('span', { class: 'muted small', text: '没有需授权的模型' });
     const quota = el('input', { type: 'number', min: '0', value: u.daily_chars || '', placeholder: '默认', style: 'width:90px' });
     t.append(el('tr', {},
       el('td', { text: u.name, title: u.id }),
       el('td', { text: u.role === 'admin' ? '管理员' : '用户' }),
       el('td', { text: new Date(u.last_login).toLocaleString() }),
       el('td', { class: 'mono', text: u.used_today }),
+      el('td', {}, modelCell),
       el('td', {}, quota, ' ', el('button', { class: 'btn small', text: '保存', onclick: async () => { await api(`/users/${encodeURIComponent(u.id)}`, 'PATCH', { dailyChars: Number(quota.value) || 0 }); loadUsers(); } })),
       el('td', {}, el('span', { class: `pill ${u.disabled ? 'bad' : 'good'}`, text: u.disabled ? '停用' : '正常' })),
       el('td', {}, el('button', { class: 'btn small', text: u.disabled ? '启用' : '停用', onclick: async () => { await api(`/users/${encodeURIComponent(u.id)}`, 'PATCH', { disabled: !u.disabled }); loadUsers(); } }))));
   }
-  if (!users.length) t.append(el('tr', {}, el('td', { colspan: 7, class: 'muted', text: '还没有人登录过' })));
+  if (!users.length) t.append(el('tr', {}, el('td', { colspan: 8, class: 'muted', text: '还没有人登录过' })));
 }
 
 // ---------- 用量 ----------

@@ -57,6 +57,8 @@ export interface UserRow {
   last_login: number;
   disabled: number;
   daily_chars: number;
+  /** 额外授权的模型（显示名 JSON 数组） */
+  models: string;
 }
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
@@ -96,6 +98,8 @@ export class Store {
     // 旧库补列：任务按登录用户计量
     const cols = (this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map((c) => c.name);
     if (!cols.includes('user_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN user_id TEXT; CREATE INDEX IF NOT EXISTS jobs_user ON jobs(user_id, created_at);');
+    const ucols = (this.db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
+    if (!ucols.includes('models')) this.db.exec("ALTER TABLE users ADD COLUMN models TEXT NOT NULL DEFAULT '[]'");
   }
 
   // ---------- users / sessions ----------
@@ -117,11 +121,12 @@ export class Store {
       FROM users u ORDER BY u.last_login DESC LIMIT ?`).all(startOfDay(), limit) as unknown as (UserRow & { used_today: number })[];
   }
 
-  updateUser(id: string, patch: { disabled?: boolean; daily_chars?: number }) {
+  updateUser(id: string, patch: { disabled?: boolean; daily_chars?: number; models?: string[] }) {
     const cur = this.getUser(id);
     if (!cur) return false;
-    this.db.prepare('UPDATE users SET disabled = ?, daily_chars = ? WHERE id = ?')
-      .run(patch.disabled === undefined ? cur.disabled : Number(patch.disabled), patch.daily_chars ?? cur.daily_chars, id);
+    this.db.prepare('UPDATE users SET disabled = ?, daily_chars = ?, models = ? WHERE id = ?')
+      .run(patch.disabled === undefined ? cur.disabled : Number(patch.disabled), patch.daily_chars ?? cur.daily_chars,
+        patch.models === undefined ? cur.models : JSON.stringify(patch.models), id);
     if (patch.disabled) this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     return true;
   }

@@ -281,6 +281,10 @@ table.kv th { color: var(--muted); font-weight: 400; white-space: nowrap; }
 .prov .wide { grid-column: span 2; }
 .prov .actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .prov .actions input { width: 200px; }
+details.grant summary { cursor: pointer; color: var(--ink-2); }
+details.grant[open] { display: grid; gap: 8px; padding: 8px 0; }
+details.grant .checks { display: grid; gap: 4px; font-family: var(--mono); font-size: 12.5px; max-height: 240px; overflow: auto; }
+.bind { grid-template-columns: 1.2fr 1.6fr 1fr .8fr .8fr auto auto; }
 .prov .offer { grid-column: 1 / -1; display: grid; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--rule); }
 .prov .offer .checks { max-height: 220px; overflow: auto; font-family: var(--mono); font-size: 12.5px; }
 .bind { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr .8fr .8fr auto; gap: 10px; align-items: end; padding: 10px 0; border-bottom: 1px dashed var(--rule); }

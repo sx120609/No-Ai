@@ -36,6 +36,8 @@ export interface ModelBinding {
   effort?: string;
   /** 该绑定的展示名 */
   label?: string;
+  /** 所有登录用户都能用；否则只有管理员和被单独授权的用户能用 */
+  public?: boolean;
 }
 
 export type ChatRole = 'system' | 'user' | 'assistant';

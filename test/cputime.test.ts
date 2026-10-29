@@ -166,6 +166,24 @@ test('an instant empty reply is reported once, not retried, and refunded', async
   assert.ok(r.warnings.some((w: string) => w.includes('安全策略')));
 });
 
+test('users get only public models until an admin grants more', async () => {
+  const admin = (path: string, method: string, body?: unknown) => fetch(base + path, { method, headers: { 'content-type': 'application/json', authorization: 'Bearer adm' }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
+  const { settings } = await admin('/api/admin/settings', 'GET');
+  // 默认只有药大拾间 AI 是公开的
+  assert.deepEqual(settings.rewriters.filter((b: any) => b.public).map((b: any) => b.label), ['药大拾间 AI']);
+  settings.rewriters.push({ provider: 'demo', model: 'rules', label: '演示模型' });
+  await admin('/api/admin/settings', 'PUT', settings);
+  assert.deepEqual((await (await call('/api/meta')).json()).rewriters, ['药大拾间 AI']);
+  assert.equal((await call('/api/rewrite', { text: AI_ZH, options: { model: '演示模型' } })).status, 403);
+  const users = await admin('/api/admin/users', 'GET');
+  assert.deepEqual(users.restrictedModels, ['演示模型']);
+  await admin('/api/admin/users/cpu:42', 'PATCH', { models: ['演示模型', '不存在的模型'] });
+  assert.deepEqual((await (await call('/api/meta')).json()).rewriters, ['药大拾间 AI', '演示模型']);
+  assert.equal((await call('/api/rewrite', { text: AI_ZH, options: { model: '演示模型' } })).status, 200);
+  await admin('/api/admin/users/cpu:42', 'PATCH', { models: [] });
+  assert.equal((await call('/api/rewrite', { text: AI_ZH, options: { model: '演示模型' } })).status, 403);
+});
+
 test('logout ends the session', async () => {
   assert.equal((await call('/auth/logout', {})).status, 200);
   assert.deepEqual((await (await call('/api/me')).json()).user, null);

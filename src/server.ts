@@ -68,6 +68,14 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       settings.rewriters = [{ provider: 'cputime', model: 'assistant', label: '药大拾间 AI' }];
     }
   }
+  // 第一次有权限设置时：默认只把药大拾间 AI 开放给所有人，其余模型需要单独授权
+  if (!settings.rewriters.some((b) => b.public !== undefined)) {
+    const isCpu = (b: ModelBinding) => settings.providers.find((p) => p.id === b.provider)?.type === 'cputime';
+    const anyCpu = settings.rewriters.some(isCpu);
+    settings.rewriters = settings.rewriters.map((b, i) => ({ ...b, public: anyCpu ? isCpu(b) || undefined : i === 0 || undefined }));
+    // 公开的排在前面，默认模型也就是拾间 AI
+    settings.rewriters.sort((a, b) => Number(!!b.public) - Number(!!a.public));
+  }
   store.saveSettings(settings);
 
   let clients = new Map<string, LLMClient>();
@@ -190,7 +198,18 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
     if (used + chars > c.dailyChars) throw new HttpError(429, `今日额度已用完（${used}/${c.dailyChars} 字）`);
   }
 
-  function meta() {
+  /** 这个调用方能用的模型：管理员、访问密钥全部；登录用户 = 公开 + 单独授权；未登录只看公开的 */
+  function allowedModels(c: Caller | null): ModelBinding[] {
+    if (c?.admin || c?.keyId) return settings.rewriters;
+    const granted = new Set<string>();
+    if (c?.userId) {
+      try { for (const m of JSON.parse(store.getUser(c.userId)?.models || '[]')) granted.add(String(m)); } catch { /* 忽略坏数据 */ }
+    }
+    return settings.rewriters.filter((b) => b.public || granted.has(label(b)));
+  }
+  const tryCaller = (req: IncomingMessage) => { try { return caller(req); } catch { return null; } };
+
+  function meta(req: IncomingMessage) {
     return {
       accessMode: config.accessMode,
       allowByo: config.allowByo,
@@ -201,7 +220,7 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
         { id: 'medium', name: '中改', desc: '重排句子和节奏，段落结构不变' },
         { id: 'deep', name: '重写', desc: '只保留事实，从头重新组织表达' },
       ],
-      rewriters: settings.rewriters.map(label),
+      rewriters: allowedModels(tryCaller(req)).map(label),
       efforts: [
         { id: '', name: '默认' }, { id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }, { id: 'xhigh', name: '极高' },
       ],
@@ -253,9 +272,14 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 
     let rewriters: ModelBinding[] | undefined;
     if (!byo) {
-      const wanted = typeof o.model === 'string' ? [o.model] : Array.isArray(o.models) ? o.models.map(String) : [];
-      rewriters = wanted.length ? settings.rewriters.filter((b) => wanted.includes(label(b))) : settings.rewriters.slice(0, 1);
-      if (!rewriters.length) throw new HttpError(400, '选择的模型不存在或已下线');
+      const wanted: string[] = typeof o.model === 'string' ? [o.model] : Array.isArray(o.models) ? o.models.map(String) : [];
+      const allowed = allowedModels(c ?? null);
+      if (!allowed.length) throw new HttpError(403, '你还没有可用的模型，请联系管理员');
+      rewriters = wanted.length ? allowed.filter((b) => wanted.includes(label(b))) : allowed.slice(0, 1);
+      if (!rewriters.length) {
+        throw new HttpError(wanted.some((w) => settings.rewriters.some((b) => label(b) === w)) ? 403 : 400,
+          wanted.some((w) => settings.rewriters.some((b) => label(b) === w)) ? '你没有这个模型的使用权限' : '选择的模型不存在或已下线');
+      }
       const effort = typeof o.effort === 'string' && EFFORTS.includes(o.effort) ? o.effort : null;
       if (effort) rewriters = rewriters.map((b) => ({ ...b, effort }));
     }
@@ -406,13 +430,21 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
         return sendJson(res, 200, { ok: false, error: (e as Error).message, latencyMs: Date.now() - started });
       }
     }
-    if (path === '/users' && req.method === 'GET') return sendJson(res, 200, { users: store.listUsers(), defaultDailyChars: config.userDailyChars });
+    if (path === '/users' && req.method === 'GET') {
+      return sendJson(res, 200, {
+        users: store.listUsers().map((u) => ({ ...u, models: (() => { try { return JSON.parse(u.models || '[]'); } catch { return []; } })() })),
+        defaultDailyChars: config.userDailyChars,
+        restrictedModels: settings.rewriters.filter((b) => !b.public).map(label),
+        publicModels: settings.rewriters.filter((b) => b.public).map(label),
+      });
+    }
     const userMatch = path.match(/^\/users\/([\w:.-]+)$/);
     if (userMatch && req.method === 'PATCH') {
       const body = await readJson(req);
       const ok = store.updateUser(userMatch[1]!, {
         disabled: body.disabled === undefined ? undefined : !!body.disabled,
         daily_chars: body.dailyChars === undefined ? undefined : Math.max(0, Number(body.dailyChars) || 0),
+        models: Array.isArray(body.models) ? body.models.map(String).filter((m: string) => settings.rewriters.some((b) => label(b) === m)).slice(0, 100) : undefined,
       });
       if (!ok) throw new HttpError(404, '不存在');
       return sendJson(res, 200, { ok: true });
@@ -479,7 +511,7 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
     try {
       if (req.method === 'OPTIONS') return void res.writeHead(204).end();
       if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, running, queued: waiters.length });
-      if (url.pathname === '/api/meta') return sendJson(res, 200, meta());
+      if (url.pathname === '/api/meta') return sendJson(res, 200, meta(req));
       if (url.pathname === '/api/me') {
         const sid = sessionId(req);
         const u = sid ? store.sessionUser(sid) : null;

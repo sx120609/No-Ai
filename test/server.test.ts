@@ -154,10 +154,11 @@ test('admin pulls upstream models; users pick one model and an effort per job', 
   assert.deepEqual(pulled.json, { ok: true, models: ['gpt-a', 'gpt-b'] });
   const got = await call('/api/admin/settings', { token: ADMIN });
   const settings = got.json.settings;
-  settings.rewriters = [{ provider: 'fake', model: 'gpt-a', label: 'gpt-a' }, { provider: 'fake', model: 'gpt-b', label: 'gpt-b' }];
+  settings.rewriters = [{ provider: 'fake', model: 'gpt-a', label: 'gpt-a', public: true }, { provider: 'fake', model: 'gpt-b', label: 'gpt-b' }];
   assert.equal((await call('/api/admin/settings', { method: 'PUT', token: ADMIN, body: settings })).status, 200);
-  const meta = (await call('/api/meta')).json;
-  assert.deepEqual(meta.rewriters, ['gpt-a', 'gpt-b']);
+  // 未登录只看到公开的；管理员看到全部
+  assert.deepEqual((await call('/api/meta')).json.rewriters, ['gpt-a']);
+  assert.deepEqual((await call('/api/meta', { token: ADMIN })).json.rewriters, ['gpt-a', 'gpt-b']);
   const before = upstreamRequests.length;
   assert.equal((await call('/api/rewrite', { body: { text: AI_ZH, options: { model: 'gpt-b', effort: 'high', maxRepairRounds: 0 } }, token: ADMIN })).status, 200);
   const sent = upstreamRequests.slice(before);

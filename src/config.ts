@@ -120,6 +120,7 @@ export function validateSettings(input: unknown, current: Settings): Settings {
       provider: b.provider,
       model: b.model.trim(),
       label: b.label?.slice(0, 40) || undefined,
+      public: b.public === true ? true : undefined,
       temperature: b.temperature === undefined || b.temperature === null || (b.temperature as unknown) === '' ? undefined : Number(b.temperature),
       maxTokens: b.maxTokens ? Number(b.maxTokens) : undefined,
       effort: b.effort || undefined,
