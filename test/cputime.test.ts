@@ -14,6 +14,8 @@ let app: Server;
 const log: string[] = [];
 let used = 0;
 let failChat = false;
+let emptyChat = false;
+let chatCalls = 0;
 let lastChat: any = null;
 
 const listen = (s: Server) => new Promise<string>((r) => s.listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${(s.address() as AddressInfo).port}`)));
@@ -47,11 +49,14 @@ before(async () => {
     if (url.pathname === '/api/integrations/no-ai/quota/refund') { used -= body.reservations.length; return ok(res, { refunded: body.reservations.length }); }
     if (url.pathname === '/api/integrations/no-ai/chat') {
       lastChat = body;
+      chatCalls++;
       if (failChat) { res.writeHead(502); return void res.end('{}'); }
       const src = body.messages.at(-1).content.match(/<source_text>\n([\s\S]*?)\n<\/source_text>/)?.[1] ?? '';
       const out = src.replace(/值得注意的是，|总而言之，|首先，|其次，|最后，/g, '').replace(/这不仅仅是技术的进步，而是一场/, '这是一场');
-      // 模拟主站线路把换行转义成字面 \n 返回
-      return ok(res, { content: `<rewritten>\n${out}\n</rewritten>`.replace(/\n/g, '\\n'), model: 'assistant-model' });
+      // 被模型安全策略拦下时，主站线路很快返回空内容，状态仍是成功
+      if (emptyChat) return ok(res, { content: '', model: 'assistant-model' });
+      // 主站线路固定要求“只输出 JSON”，模型把改写稿包成 {"rewritten": "..."}
+      return ok(res, { content: JSON.stringify({ rewritten: `<rewritten>\n${out}\n</rewritten>` }), model: 'assistant-model' });
     }
     res.writeHead(404); res.end('{}');
   });
@@ -147,6 +152,18 @@ test('quota is refunded when the model never succeeds, and exhaustion is reporte
   const r2 = await (await call('/api/rewrite', { text: AI_ZH, options: { maxRepairRounds: 0 } })).json();
   assert.ok(r2.warnings.some((w: string) => w.includes('额度')));
   assert.equal(used, 5);
+});
+
+test('an instant empty reply is reported once, not retried, and refunded', async () => {
+  emptyChat = true;
+  used = 0;
+  const callsBefore = chatCalls;
+  const usedBefore = used;
+  const r = await (await call('/api/rewrite', { text: AI_ZH, options: { maxRepairRounds: 2 } })).json();
+  emptyChat = false;
+  assert.equal(chatCalls - callsBefore, 1);
+  assert.equal(used, usedBefore);
+  assert.ok(r.warnings.some((w: string) => w.includes('安全策略')));
 });
 
 test('logout ends the session', async () => {

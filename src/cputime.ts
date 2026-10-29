@@ -118,11 +118,30 @@ export function createCputimeClient(provider: ProviderConfig, c: CputimeConfig, 
         const status = (err as { status?: number }).status;
         throw new ProviderError(`药大拾间 AI：${(err as Error).message}`, { status, retryable: !status || status >= 500 });
       }
-      let text = String(r.data?.content ?? '');
-      // 主站线路有时把换行以转义文本返回（字面的 \n），没有真换行时还原
-      if (!text.includes('\n') && /\\[nr]/.test(text)) text = text.replace(/\\r\\n|\\n|\\r/g, '\n').replace(/\\t/g, '\t');
-      if (!text.trim()) throw new ProviderError('药大拾间 AI 返回空内容', { retryable: true });
+      const text = unwrapJsonOnly(String(r.data?.content ?? ''));
+      // 很快返回空内容基本是被模型的安全策略拦下了，重试也一样，不要浪费调用
+      if (!text.trim()) {
+        throw new ProviderError('药大拾间 AI 没有返回内容，可能被模型安全策略拦下（例如文中含服务器命令或脚本），换个说法再试', { retryable: false });
+      }
       return { text, model: String(r.data?.model || 'cputime'), latencyMs: Date.now() - started };
     },
   };
+}
+
+/**
+ * 主站线路固定要求模型“只输出 JSON”，改写稿会被包成 {"rewritten": "…"}。
+ * 只有一个字符串字段的 JSON 取出它（换行随 JSON 解析还原）；其他 JSON（如精修的 edits、审校结论）原样返回。
+ */
+export function unwrapJsonOnly(raw: string): string {
+  const s = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  if (s.startsWith('{') && s.endsWith('}')) {
+    try {
+      const obj = JSON.parse(s);
+      const entries = obj && typeof obj === 'object' && !Array.isArray(obj) ? Object.entries(obj) : [];
+      if (entries.length === 1 && typeof entries[0]![1] === 'string') return entries[0]![1] as string;
+    } catch { /* 不是合法 JSON，按普通文本处理 */ }
+  }
+  // 没有真换行却有字面的 \n：还原
+  if (!raw.includes('\n') && /\\[nr]/.test(raw)) return raw.replace(/\\r\\n|\\n|\\r/g, '\n').replace(/\\t/g, '\t');
+  return raw;
 }

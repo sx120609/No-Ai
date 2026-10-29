@@ -17,6 +17,7 @@ import {
   buildJudgeMessages, buildRepairMessages, buildRewriteMessages, buildSpanEditMessages, parseJson, parseRewritten,
 } from './prompts.ts';
 import { compare } from './similarity.ts';
+import { ProviderError } from '../providers/http.ts';
 import { copiedFromSamples, distillStyle, type StyleCard } from './style.ts';
 
 export interface PipelineDeps {
@@ -179,11 +180,14 @@ async function rewriteUnit(source: string, chunkIndex: number, ctx: UnitCtx): Pr
   const maxRounds = Math.max(0, opts.maxRepairRounds ?? 2);
   const warnings: string[] = [];
 
+  const fatalErrors = new Set<string>();
   // 第一轮：每个改写模型各出一个候选
   const first = await Promise.all(ctx.rewriters.map((b) => attempt(b, 0, null)));
   let best = pickBest(first);
 
   for (let round = 1; round <= maxRounds && best && !best.passed; round++) {
+    // 只有一个改写模型、而它的错误重试也没用（如额度用完、被安全策略拦下）时直接停
+    if (best.error && fatalErrors.has(best.id) && ctx.rewriters.length === 1) break;
     // 调用失败时换下一个模型从头来；内容不过关时由同一模型修复
     const idx = ctx.rewriters.findIndex((b) => label(b) === best!.binding);
     const binding = best.error ? ctx.rewriters[(idx + 1) % ctx.rewriters.length]! : ctx.rewriters[Math.max(0, idx)]!;
@@ -232,6 +236,7 @@ async function rewriteUnit(source: string, chunkIndex: number, ctx: UnitCtx): Pr
         ledger: { ok: false, missing: [], added: [], lengthRatio: 1, paragraphDelta: 0, problems: [] },
         problems: [message], severe: true, total: -1, passed: false, error: message, latencyMs: Date.now() - started,
       };
+      if (err instanceof ProviderError && !err.retryable) fatalErrors.add(cid);
       ctx.emit(cand);
       if (ctx.signal?.aborted) throw err;
       return cand;
