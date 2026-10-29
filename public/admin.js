@@ -22,9 +22,10 @@ function el(tag, attrs = {}, ...children) {
 }
 
 async function api(path, method = 'GET', body) {
+  const token = ls.get('noai.admin');
   const res = await fetch(`/api/admin${path}`, {
     method,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${ls.get('noai.admin') ?? ''}` },
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -45,8 +46,14 @@ function showLogin(msg) {
 }
 
 async function boot() {
-  if (!ls.get('noai.admin')) return showLogin();
-  const data = await api('/settings');
+  fetch('/api/meta').then((r) => r.json()).then((m) => { if (m.auth?.provider) $('ssoLogin').classList.remove('hidden'); }).catch(() => {});
+  // 没存令牌时也先试一下：药大拾间管理员登录后靠会话 cookie 就能进
+  let data;
+  try {
+    data = await api('/settings');
+  } catch {
+    return showLogin();
+  }
   state = structuredClone(data.settings);
   presets = data.presets;
   $('login').classList.add('hidden');
@@ -205,6 +212,27 @@ $('kCreate').addEventListener('click', async () => {
   loadKeys();
 });
 
+// ---------- 用户 ----------
+
+async function loadUsers() {
+  const { users, defaultDailyChars } = await api('/users');
+  $('usersNote').textContent = `用药大拾间账号登录。每日额度留空或 0 时用默认值（${defaultDailyChars || '不限'} 字）`;
+  const t = $('users');
+  t.replaceChildren(el('tr', {}, ['用户', '身份', '最近登录', '今日已用', '每日额度', '状态', ''].map((h) => el('th', { text: h }))));
+  for (const u of users) {
+    const quota = el('input', { type: 'number', min: '0', value: u.daily_chars || '', placeholder: '默认', style: 'width:90px' });
+    t.append(el('tr', {},
+      el('td', { text: u.name, title: u.id }),
+      el('td', { text: u.role === 'admin' ? '管理员' : '用户' }),
+      el('td', { text: new Date(u.last_login).toLocaleString() }),
+      el('td', { class: 'mono', text: u.used_today }),
+      el('td', {}, quota, ' ', el('button', { class: 'btn small', text: '保存', onclick: async () => { await api(`/users/${encodeURIComponent(u.id)}`, 'PATCH', { dailyChars: Number(quota.value) || 0 }); loadUsers(); } })),
+      el('td', {}, el('span', { class: `pill ${u.disabled ? 'bad' : 'good'}`, text: u.disabled ? '停用' : '正常' })),
+      el('td', {}, el('button', { class: 'btn small', text: u.disabled ? '启用' : '停用', onclick: async () => { await api(`/users/${encodeURIComponent(u.id)}`, 'PATCH', { disabled: !u.disabled }); loadUsers(); } }))));
+  }
+  if (!users.length) t.append(el('tr', {}, el('td', { colspan: 7, class: 'muted', text: '还没有人登录过' })));
+}
+
 // ---------- 用量 ----------
 
 async function loadUsage() {
@@ -238,7 +266,8 @@ async function loadUsage() {
 
 for (const b of $('nav').children) b.addEventListener('click', () => {
   for (const x of $('nav').children) x.classList.toggle('on', x === b);
-  for (const v of ['models', 'keys', 'usage']) $(`v-${v}`).classList.toggle('hidden', v !== b.dataset.v);
+  for (const v of ['models', 'users', 'keys', 'usage']) $(`v-${v}`).classList.toggle('hidden', v !== b.dataset.v);
+  if (b.dataset.v === 'users') loadUsers();
   if (b.dataset.v === 'keys') loadKeys();
   if (b.dataset.v === 'usage') loadUsage();
 });
@@ -260,6 +289,10 @@ $('doLogin').addEventListener('click', async () => {
   try { await boot(); } catch { /* showLogin 已处理 */ }
 });
 $('token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('doLogin').click(); });
-$('logout').addEventListener('click', () => { ls.set('noai.admin', null); location.reload(); });
+$('logout').addEventListener('click', async () => {
+  ls.set('noai.admin', null);
+  await fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+});
 
 boot().catch(() => {});

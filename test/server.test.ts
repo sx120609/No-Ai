@@ -60,11 +60,13 @@ const call = async (path: string, init: { method?: string; body?: unknown; token
   return { status: res.status, json, text };
 };
 
-test('meta is public, detect requires a key', async () => {
+test('meta and detect are public, rewrite requires a key', async () => {
   const meta = await call('/api/meta');
   assert.equal(meta.status, 200);
   assert.equal(meta.json.accessMode, 'key');
-  assert.equal((await call('/api/detect', { body: { text: AI_ZH } })).status, 401);
+  assert.equal((await call('/api/detect', { body: { text: AI_ZH } })).status, 200);
+  assert.equal((await call('/api/rewrite', { body: { text: AI_ZH } })).status, 401);
+  assert.equal((await call('/api/me')).json.user, null);
   const d = await call('/api/detect', { body: { text: AI_ZH }, token: ADMIN });
   assert.equal(d.status, 200);
   assert.ok(d.json.score >= 60);

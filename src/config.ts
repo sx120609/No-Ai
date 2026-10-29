@@ -13,8 +13,19 @@ export const serverConfig = {
   port: int(env.PORT, 3001),
   host: env.HOST || '127.0.0.1',
   dataDir: env.DATA_DIR || join(process.cwd(), 'data'),
-  /** open：任何人可用（按 IP 限额）；key：需要访问密钥 */
-  accessMode: (env.ACCESS_MODE === 'open' ? 'open' : 'key') as 'open' | 'key',
+  /** open：任何人可用（按 IP 限额）；key：需要访问密钥；cpu：用药大拾间账号登录（访问密钥仍可用于 API） */
+  accessMode: (env.ACCESS_MODE === 'open' || env.ACCESS_MODE === 'cpu' ? env.ACCESS_MODE : 'key') as 'open' | 'key' | 'cpu',
+  /** 对外地址，用于登录回跳与同源校验，如 https://noai.cputime.cn */
+  publicUrl: env.PUBLIC_URL || '',
+  /** 登录用户在 No-AI 侧的每日字数上限，0 不限（用药大拾间 AI 时以拾间 AI 额度为准） */
+  userDailyChars: int(env.USER_DAILY_CHARS, 0),
+  /** 药大拾间集成：登录、AI 线路、拾间 AI 额度。CPUTIME_SECRET 与主站 NOAI_INTEGRATION_SECRET 相同 */
+  cputime: {
+    origin: (env.CPUTIME_ORIGIN || 'https://cputime.cn').replace(/\/+$/, ''),
+    clientId: env.CPUTIME_CLIENT_ID || 'no-ai',
+    secret: (env.CPUTIME_SECRET || '').trim(),
+    publicUrl: env.PUBLIC_URL || '',
+  },
   /** 允许请求自带供应商（BYO key），兼容旧版 /api/rewrite {text, apiKey, baseUrl, model} */
   allowByo: env.ALLOW_BYO === '1',
   maxInputChars: int(env.MAX_INPUT_CHARS, 20_000),
@@ -71,7 +82,7 @@ export function seedSettings(): Settings {
 }
 
 const ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-const TYPES = new Set(['openai', 'anthropic', 'gemini', 'mock']);
+const TYPES = new Set(['openai', 'anthropic', 'gemini', 'mock', 'cputime']);
 
 /** 校验管理员提交的设置；未提交新密钥时保留旧密钥 */
 export function validateSettings(input: unknown, current: Settings): Settings {
@@ -133,7 +144,7 @@ export function maskSettings(s: Settings) {
     providers: s.providers.map((p) => ({
       ...p,
       apiKey: p.apiKey ? MASK : '',
-      keyStatus: p.type === 'mock' ? 'none-needed' : resolveApiKey(p) ? (p.apiKeyEnv && process.env[p.apiKeyEnv] ? `env:${p.apiKeyEnv}` : 'stored') : 'missing',
+      keyStatus: p.type === 'mock' || p.type === 'cputime' ? 'none-needed' : resolveApiKey(p) ? (p.apiKeyEnv && process.env[p.apiKeyEnv] ? `env:${p.apiKeyEnv}` : 'stored') : 'missing',
     })),
   };
 }

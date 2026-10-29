@@ -10,8 +10,9 @@ import { detect } from './detect/index.ts';
 import { batchDiversity } from './pipeline/batch.ts';
 import { runPipeline, type PipelineDeps } from './pipeline/index.ts';
 import { MODES } from './pipeline/prompts.ts';
-import { assertPublicBaseUrl, createClient, PROVIDER_PRESETS } from './providers/index.ts';
+import { assertPublicBaseUrl, createClient, PROVIDER_PRESETS, ProviderError } from './providers/index.ts';
 import { hashKey, Store, type Settings } from './store.ts';
+import * as cputime from './cputime.ts';
 import type { LLMClient, Mode, ModelBinding, ProviderConfig, RewriteOptions, RewriteResult, Strength } from './types.ts';
 
 const PUBLIC_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'public');
@@ -31,8 +32,22 @@ class HttpError extends Error {
 interface Caller {
   admin: boolean;
   keyId: string | null;
+  /** 用药大拾间账号登录的用户 */
+  userId: string | null;
   dailyChars: number;
   ip: string;
+}
+
+const SESSION_COOKIE = 'noai_sid';
+const SESSION_TTL = 30 * 86_400_000;
+
+export function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (header ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
 }
 
 export interface AppOptions {
@@ -44,18 +59,61 @@ export interface AppOptions {
 
 export function createApp({ store, config = serverConfig, adminTokenHash }: AppOptions): RequestListener {
   let settings: Settings = store.getSettings() ?? seedSettings();
-  if (!store.getSettings()) store.saveSettings(settings);
+  const cpu = config.cputime;
+  const cpuOn = cputime.cputimeEnabled(cpu);
+  // 接了药大拾间就默认走主站 AI 线路：补上供应商；原来只有离线演示时换成它
+  if (cpuOn && !settings.providers.some((p) => p.type === 'cputime')) {
+    settings = { ...settings, providers: [{ id: 'cputime', name: '药大拾间 AI', type: 'cputime' }, ...settings.providers] };
+    if (settings.rewriters.every((b) => settings.providers.find((p) => p.id === b.provider)?.type === 'mock')) {
+      settings.rewriters = [{ provider: 'cputime', model: 'assistant', label: '药大拾间 AI' }];
+    }
+  }
+  store.saveSettings(settings);
 
   let clients = new Map<string, LLMClient>();
+  const providerFor = (id: string) => {
+    const p = settings.providers.find((x) => x.id === id && x.enabled !== false);
+    if (!p) throw new HttpError(400, `供应商不存在或已停用：${id}`);
+    return p;
+  };
   const clientFor = (id: string) => {
     let c = clients.get(id);
     if (!c) {
-      const p = settings.providers.find((x) => x.id === id && x.enabled !== false);
-      if (!p) throw new HttpError(400, `供应商不存在或已停用：${id}`);
+      const p = providerFor(id);
+      if (p.type === 'cputime') {
+        if (!cpuOn) throw new HttpError(503, '药大拾间集成未配置');
+        return cputime.createCputimeClient(p, cpu);
+      }
       clients.set(id, (c = createClient(p)));
     }
     return c;
   };
+  const cpuUserId = (userId: string | null) => (userId?.startsWith('cpu:') ? Number(userId.slice(4)) : null);
+
+  /**
+   * 拾间 AI 额度：一次任务第一次真正调用主站模型时才扣（原文不像 AI、没调模型就不扣），
+   * 按篇幅每 3000 字 1 次，最多 8 次；任务里模型一次都没成功则退回。
+   */
+  function quotaTicket(c: Caller, chars: number) {
+    const uid = cpuUserId(c.userId);
+    const units = Math.min(8, Math.max(1, Math.ceil(chars / 3000)));
+    let pending: Promise<void> | null = null;
+    let reservations: unknown[] = [];
+    return {
+      ensure() {
+        if (uid === null) return Promise.resolve();
+        pending ??= cputime.consumeQuota(cpu, uid, units).then((r) => { reservations = r.reservations; }).catch((err) => {
+          const status = (err as { status?: number }).status;
+          throw new ProviderError(status === 403 ? '今天的拾间 AI 额度和点数都已用完，明天 00:00 恢复' : `扣除拾间 AI 额度失败：${(err as Error).message}`, { status, retryable: false });
+        });
+        return pending;
+      },
+      async refund() {
+        if (uid !== null && reservations.length) await cputime.refundQuota(cpu, uid, reservations).catch(() => {});
+        reservations = [];
+      },
+    };
+  }
 
   // ---- 限流、并发 ----
   const hits = new Map<string, number[]>();
@@ -89,28 +147,46 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 
   const safeEq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
+  const oauthStates = new Map<string, { verifier: string; next: string; expires: number }>();
+  const safeNext = (v: string | null) => (v && /^\/(?!\/)[\w\-./?=&%]*$/.test(v) ? v : '/');
+  const loginFailed = (res: ServerResponse, msg: string) => {
+    res.writeHead(303, { location: `/?login_error=${encodeURIComponent(msg)}`, 'cache-control': 'no-store' });
+    res.end();
+  };
+  const sessionId = (req: IncomingMessage) => parseCookies(req.headers.cookie)[SESSION_COOKIE] || '';
+  const sessionCookie = (value: string, maxAgeMs: number) =>
+    `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(maxAgeMs / 1000)}${config.publicUrl.startsWith('https:') ? '; Secure' : ''}`;
+
   function caller(req: IncomingMessage): Caller {
     const ip = clientIp(req, config.trustProxy);
     const auth = req.headers.authorization?.replace(/^Bearer\s+/i, '') || (req.headers['x-api-key'] as string | undefined) || '';
-    if (auth && adminTokenHash && safeEq(hashKey(auth), adminTokenHash)) return { admin: true, keyId: null, dailyChars: 0, ip };
+    if (auth && adminTokenHash && safeEq(hashKey(auth), adminTokenHash)) return { admin: true, keyId: null, userId: null, dailyChars: 0, ip };
     if (auth) {
       const k = store.findKey(auth);
       if (!k) throw new HttpError(401, '访问密钥无效');
-      return { admin: false, keyId: k.id, dailyChars: k.daily_chars, ip };
+      return { admin: false, keyId: k.id, userId: null, dailyChars: k.daily_chars, ip };
     }
-    if (config.accessMode === 'open') return { admin: false, keyId: null, dailyChars: config.openDailyChars, ip };
-    throw new HttpError(401, '需要访问密钥');
+    const sid = sessionId(req);
+    if (sid) {
+      // 用 cookie 登录的请求做同源校验，防跨站提交
+      const origin = req.headers.origin;
+      if (origin && config.publicUrl && origin !== new URL(config.publicUrl).origin) throw new HttpError(403, '来源不被允许');
+      const u = store.sessionUser(sid);
+      if (u) return { admin: u.role === 'admin', keyId: null, userId: u.id, dailyChars: u.daily_chars || config.userDailyChars, ip };
+    }
+    if (config.accessMode === 'open') return { admin: false, keyId: null, userId: null, dailyChars: config.openDailyChars, ip };
+    throw new HttpError(401, config.accessMode === 'cpu' ? '请先用药大拾间账号登录' : '需要访问密钥');
   }
 
   function requireAdmin(req: IncomingMessage) {
     const c = caller(req);
-    if (!c.admin) throw new HttpError(403, '需要管理员令牌');
+    if (!c.admin) throw new HttpError(403, '需要管理员权限');
   }
 
   function checkQuota(c: Caller, chars: number) {
     if (chars > config.maxInputChars) throw new HttpError(413, `单次最多 ${config.maxInputChars} 字`);
     if (c.admin || !c.dailyChars) return;
-    const used = store.usedToday(c.keyId, c.keyId ? null : c.ip);
+    const used = c.userId ? store.usedTodayByUser(c.userId) : store.usedToday(c.keyId, c.keyId ? null : c.ip);
     if (used + chars > c.dailyChars) throw new HttpError(429, `今日额度已用完（${used}/${c.dailyChars} 字）`);
   }
 
@@ -127,12 +203,13 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       ],
       rewriters: settings.rewriters.map(label),
       judge: !!settings.judge,
+      auth: cpuOn ? { provider: 'cputime', name: '药大拾间', loginUrl: '/auth/login' } : null,
       defaults: settings.defaults,
     };
   }
 
   /** 解析用户提交的改写参数；BYO 供应商另外生成依赖 */
-  function buildRequest(body: any): { text: string; options: RewriteOptions; deps: PipelineDeps } {
+  function buildRequest(body: any, c?: Caller, ticket?: ReturnType<typeof quotaTicket>): { text: string; options: RewriteOptions; deps: PipelineDeps } {
     const text = String(body?.text ?? '').trim();
     if (!text) throw new HttpError(400, 'text 不能为空');
     const o = body.options ?? {};
@@ -140,8 +217,18 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
     const strArr = (v: unknown, max: number, maxLen: number) =>
       Array.isArray(v) ? v.map(String).map((s) => s.slice(0, maxLen)).filter((s) => s.trim()).slice(0, max) : undefined;
 
+    const uid = cpuUserId(c?.userId ?? null);
+    const usesCpu = [...settings.rewriters, ...(settings.judge ? [settings.judge] : [])]
+      .some((b) => settings.providers.find((p) => p.id === b.provider)?.type === 'cputime');
+    if (usesCpu && uid === null && !c?.admin && !c?.keyId) throw new HttpError(401, '请先用药大拾间账号登录');
     let deps: PipelineDeps = {
-      client: clientFor,
+      client: (id) => {
+        const p = providerFor(id);
+        if (p.type !== 'cputime') return clientFor(id);
+        if (!cpuOn) throw new HttpError(503, '药大拾间集成未配置');
+        const inner = cputime.createCputimeClient(p, cpu, uid ?? undefined);
+        return { provider: p, chat: async (r) => { await ticket?.ensure(); return inner.chat(r); } };
+      },
       rewriters: settings.rewriters,
       judge: settings.judge,
       concurrency: 3,
@@ -188,7 +275,7 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 
   function record(c: Caller, kind: string, input: number, r: RewriteResult | null, err: unknown, started: number) {
     store.recordJob({
-      id: r?.id ?? randomUUID(), key_id: c.keyId, ip: c.ip, created_at: started, kind,
+      id: r?.id ?? randomUUID(), key_id: c.keyId, user_id: c.userId, ip: c.ip, created_at: started, kind,
       status: err ? 'error' : 'done', input_chars: input, output_chars: r?.output.length ?? 0,
       before_score: r?.before.score ?? null, after_score: r?.after.score ?? null, passed: r ? Number(r.passed) : null,
       calls: r?.usage.calls ?? 0, input_tokens: r?.usage.inputTokens ?? 0, output_tokens: r?.usage.outputTokens ?? 0,
@@ -199,9 +286,10 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 
   async function handleRewrite(req: IncomingMessage, res: ServerResponse, url: URL) {
     const c = caller(req);
-    rateLimit(c.keyId ?? c.ip);
+    rateLimit(c.userId ?? c.keyId ?? c.ip);
     const body = await readJson(req);
-    const { text, options, deps } = buildRequest(body);
+    const ticket = quotaTicket(c, String(body?.text ?? '').length);
+    const { text, options, deps } = buildRequest(body, c, ticket);
     checkQuota(c, text.length);
     const stream = url.searchParams.get('stream') === '1' || /text\/event-stream/.test(req.headers.accept ?? '');
     const ac = new AbortController();
@@ -226,11 +314,14 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
         }
       } else {
         result = await runPipeline(text, options, deps, undefined, ac.signal);
+        if (!result.candidates.some((x) => !x.error)) await ticket.refund();
         // text 字段兼容旧版 /api/rewrite 客户端
         sendJson(res, 200, { text: result.output, ...result });
       }
+      if (!result.candidates.some((x) => !x.error)) await ticket.refund();
       record(c, 'rewrite', text.length, result, null, started);
     } catch (err) {
+      await ticket.refund();
       record(c, 'rewrite', text.length, null, err, started);
       if (!stream) throw err;
     } finally {
@@ -240,18 +331,30 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
 
   async function handleBatch(req: IncomingMessage, res: ServerResponse) {
     const c = caller(req);
-    rateLimit(c.keyId ?? c.ip);
+    rateLimit(c.userId ?? c.keyId ?? c.ip);
     const body = await readJson(req);
     const items: string[] = Array.isArray(body?.items) ? body.items.map(String).filter((s: string) => s.trim()).slice(0, 30) : [];
     if (!items.length) throw new HttpError(400, 'items 不能为空（最多 30 篇）');
     const total = items.reduce((a, b) => a + b.length, 0);
     checkQuota(c, total);
-    const parsed = items.map((t) => buildRequest({ ...body, text: t }));
+    const parsed = items.map((t) => {
+      const ticket = quotaTicket(c, t.length);
+      return { ...buildRequest({ ...body, text: t }, c, ticket), ticket };
+    });
     await acquire();
     const started = Date.now();
     try {
       const results: RewriteResult[] = [];
-      for (const p of parsed) results.push(await runPipeline(p.text, p.options, p.deps));
+      for (const p of parsed) {
+        try {
+          const r = await runPipeline(p.text, p.options, p.deps);
+          if (!r.candidates.some((x) => !x.error)) await p.ticket.refund();
+          results.push(r);
+        } catch (err) {
+          await p.ticket.refund();
+          throw err;
+        }
+      }
       const lang = results[0]!.lang;
       const diversity = batchDiversity(results.map((r) => r.output), lang);
       for (const r of results) record(c, 'batch', r.input.length, r, null, started);
@@ -289,6 +392,17 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: (e as Error).message, latencyMs: Date.now() - started });
       }
+    }
+    if (path === '/users' && req.method === 'GET') return sendJson(res, 200, { users: store.listUsers(), defaultDailyChars: config.userDailyChars });
+    const userMatch = path.match(/^\/users\/([\w:.-]+)$/);
+    if (userMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      const ok = store.updateUser(userMatch[1]!, {
+        disabled: body.disabled === undefined ? undefined : !!body.disabled,
+        daily_chars: body.dailyChars === undefined ? undefined : Math.max(0, Number(body.dailyChars) || 0),
+      });
+      if (!ok) throw new HttpError(404, '不存在');
+      return sendJson(res, 200, { ok: true });
     }
     if (path === '/keys' && req.method === 'GET') return sendJson(res, 200, { keys: store.listKeys() });
     if (path === '/keys' && req.method === 'POST') {
@@ -353,9 +467,57 @@ export function createApp({ store, config = serverConfig, adminTokenHash }: AppO
       if (req.method === 'OPTIONS') return void res.writeHead(204).end();
       if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, running, queued: waiters.length });
       if (url.pathname === '/api/meta') return sendJson(res, 200, meta());
+      if (url.pathname === '/api/me') {
+        const sid = sessionId(req);
+        const u = sid ? store.sessionUser(sid) : null;
+        const uid = cpuUserId(u?.id ?? null);
+        const quota = uid !== null && cpuOn ? await cputime.quotaStatus(cpu, uid).catch(() => null) : null;
+        return sendJson(res, 200, { user: u ? { id: u.id, name: u.name, avatar: u.avatar, admin: u.role === 'admin' } : null, quota });
+      }
+      if (url.pathname === '/auth/login' && req.method === 'GET') {
+        if (!cpuOn) throw new HttpError(404, '没有配置药大拾间登录');
+        const next = safeNext(url.searchParams.get('next'));
+        const { state, verifier, url: target } = cputime.loginRequest(cpu);
+        for (const [k, v] of oauthStates) if (v.expires < Date.now()) oauthStates.delete(k);
+        if (oauthStates.size > 5000) throw new HttpError(503, '登录请求过多，请稍后再试');
+        oauthStates.set(state, { verifier, next, expires: Date.now() + 10 * 60_000 });
+        res.writeHead(303, { location: target, 'cache-control': 'no-store' });
+        return void res.end();
+      }
+      if (url.pathname === '/api/auth/cputime/callback' && req.method === 'GET') {
+        const key = url.searchParams.get('state') || '';
+        const st = oauthStates.get(key);
+        oauthStates.delete(key);
+        const code = url.searchParams.get('code') || '';
+        if (!st || st.expires < Date.now() || !code) return loginFailed(res, '登录已过期，请重新登录');
+        try {
+          const who = await cputime.loginUser(cpu, code, st.verifier);
+          const admin = await cputime.isGlobalAdmin(cpu, who.id).catch(() => false);
+          const user = store.upsertUser({ id: `cpu:${who.id}`, name: who.nickname, avatar: who.avatar, role: admin ? 'admin' : 'user' });
+          if (user.disabled) return loginFailed(res, '这个账号在去AI味已被停用');
+          // 管理员会话短一些，主站权限变化能更快生效
+          const ttl = admin ? 8 * 3_600_000 : SESSION_TTL;
+          res.writeHead(303, { location: st.next, 'set-cookie': sessionCookie(store.createSession(user.id, ttl), ttl), 'cache-control': 'no-store' });
+          return void res.end();
+        } catch (err) {
+          console.error('[cputime login]', (err as Error).message);
+          return loginFailed(res, '药大拾间登录失败，请稍后重试');
+        }
+      }
+      if (url.pathname === '/auth/logout' && req.method === 'POST') {
+        const sid = sessionId(req);
+        if (sid) store.deleteSession(sid);
+        res.setHeader('set-cookie', sessionCookie('', 0));
+        return sendJson(res, 200, { ok: true });
+      }
       if (url.pathname === '/api/detect' && req.method === 'POST') {
-        const c = caller(req);
-        rateLimit(`d:${c.keyId ?? c.ip}`);
+        // 检测不调用模型，未登录也能用，按 IP 限流
+        let id = `d:${clientIp(req, config.trustProxy)}`;
+        try {
+          const c = caller(req);
+          id = `d:${c.userId ?? c.keyId ?? c.ip}`;
+        } catch { /* 匿名 */ }
+        rateLimit(id);
         const body = await readJson(req);
         const text = String(body?.text ?? '');
         if (!text.trim()) throw new HttpError(400, 'text 不能为空');

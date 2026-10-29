@@ -30,6 +30,7 @@ export interface ApiKeyRow {
 export interface JobRow {
   id: string;
   key_id: string | null;
+  user_id: string | null;
   ip: string | null;
   created_at: number;
   kind: string;
@@ -45,6 +46,17 @@ export interface JobRow {
   elapsed_ms: number;
   error: string | null;
   result_json: string | null;
+}
+
+export interface UserRow {
+  id: string;
+  name: string;
+  avatar: string | null;
+  role: string;
+  created_at: number;
+  last_login: number;
+  disabled: number;
+  daily_chars: number;
 }
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
@@ -71,7 +83,71 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at);
       CREATE INDEX IF NOT EXISTS jobs_key ON jobs(key_id, created_at);
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, avatar TEXT, role TEXT NOT NULL DEFAULT 'user',
+        created_at INTEGER NOT NULL, last_login INTEGER NOT NULL, disabled INTEGER NOT NULL DEFAULT 0,
+        daily_chars INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        id_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
     `);
+    // 旧库补列：任务按登录用户计量
+    const cols = (this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes('user_id')) this.db.exec('ALTER TABLE jobs ADD COLUMN user_id TEXT; CREATE INDEX IF NOT EXISTS jobs_user ON jobs(user_id, created_at);');
+  }
+
+  // ---------- users / sessions ----------
+
+  upsertUser(u: { id: string; name: string; avatar?: string | null; role: string }): UserRow {
+    const now = Date.now();
+    this.db.prepare(`INSERT INTO users (id, name, avatar, role, created_at, last_login) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, role = excluded.role, last_login = excluded.last_login`)
+      .run(u.id, u.name, u.avatar ?? null, u.role, now, now);
+    return this.getUser(u.id)!;
+  }
+
+  getUser(id: string): UserRow | null {
+    return (this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined) ?? null;
+  }
+
+  listUsers(limit = 200): (UserRow & { used_today: number })[] {
+    return this.db.prepare(`SELECT u.*, COALESCE((SELECT SUM(input_chars) FROM jobs j WHERE j.user_id = u.id AND j.created_at >= ?), 0) AS used_today
+      FROM users u ORDER BY u.last_login DESC LIMIT ?`).all(startOfDay(), limit) as unknown as (UserRow & { used_today: number })[];
+  }
+
+  updateUser(id: string, patch: { disabled?: boolean; daily_chars?: number }) {
+    const cur = this.getUser(id);
+    if (!cur) return false;
+    this.db.prepare('UPDATE users SET disabled = ?, daily_chars = ? WHERE id = ?')
+      .run(patch.disabled === undefined ? cur.disabled : Number(patch.disabled), patch.daily_chars ?? cur.daily_chars, id);
+    if (patch.disabled) this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+    return true;
+  }
+
+  /** 新建会话，返回明文会话 id（只放在 HttpOnly cookie 里，库里存哈希） */
+  createSession(userId: string, ttlMs: number): string {
+    const sid = randomBytes(32).toString('base64url');
+    const now = Date.now();
+    this.db.prepare('INSERT INTO sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(hashKey(sid), userId, now, now + ttlMs);
+    this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+    return sid;
+  }
+
+  sessionUser(sid: string): UserRow | null {
+    const row = this.db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.id_hash = ? AND s.expires_at > ? AND u.disabled = 0`).get(hashKey(sid), Date.now()) as UserRow | undefined;
+    return row ?? null;
+  }
+
+  deleteSession(sid: string) {
+    this.db.prepare('DELETE FROM sessions WHERE id_hash = ?').run(hashKey(sid));
+  }
+
+  usedTodayByUser(userId: string): number {
+    const row = this.db.prepare('SELECT COALESCE(SUM(input_chars),0) AS n FROM jobs WHERE user_id = ? AND created_at >= ?').get(userId, startOfDay());
+    return Number((row as { n: number }).n);
   }
 
   // ---------- settings ----------
@@ -138,17 +214,17 @@ export class Store {
     return Number((row as { n: number }).n);
   }
 
-  recordJob(j: Omit<JobRow, 'result_json'> & { result_json?: string | null }) {
-    this.db.prepare(`INSERT INTO jobs (id, key_id, ip, created_at, kind, status, input_chars, output_chars, before_score, after_score,
+  recordJob(j: Omit<JobRow, 'result_json' | 'user_id'> & { result_json?: string | null; user_id?: string | null }) {
+    this.db.prepare(`INSERT INTO jobs (id, key_id, user_id, ip, created_at, kind, status, input_chars, output_chars, before_score, after_score,
       passed, calls, input_tokens, output_tokens, elapsed_ms, error, result_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      j.id, j.key_id, j.ip, j.created_at, j.kind, j.status, j.input_chars, j.output_chars, j.before_score, j.after_score,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      j.id, j.key_id, j.user_id ?? null, j.ip, j.created_at, j.kind, j.status, j.input_chars, j.output_chars, j.before_score, j.after_score,
       j.passed, j.calls, j.input_tokens, j.output_tokens, j.elapsed_ms, j.error, j.result_json ?? null,
     );
   }
 
   listJobs(limit = 50): Omit<JobRow, 'result_json'>[] {
-    return this.db.prepare(`SELECT id, key_id, ip, created_at, kind, status, input_chars, output_chars, before_score, after_score,
+    return this.db.prepare(`SELECT id, key_id, user_id, ip, created_at, kind, status, input_chars, output_chars, before_score, after_score,
       passed, calls, input_tokens, output_tokens, elapsed_ms, error FROM jobs ORDER BY created_at DESC LIMIT ?`).all(limit) as unknown as Omit<JobRow, 'result_json'>[];
   }
 

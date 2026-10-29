@@ -25,6 +25,7 @@ let lastResult = null;
 let lastDetect = null;
 let running = false;
 let startedAt = 0;
+let me = null;
 
 function el(tag, attrs = {}, ...children) {
   const n = document.createElement(tag);
@@ -109,7 +110,17 @@ async function init() {
   $('semantic').checked = !!meta.defaults.semanticCheck && meta.judge;
   $('semantic').disabled = !meta.judge;
   if (!meta.judge) $('semantic').parentElement.title = '后台没有配置核对用的模型';
-  if (meta.accessMode === 'key') {
+  const meInfo = await fetch('/api/me').then((r) => r.json()).catch(() => ({ user: null }));
+  me = meInfo.user;
+  if (me) {
+    $('userName').textContent = me.name;
+    $('userBox').classList.remove('hidden');
+    showQuota(meInfo.quota);
+  } else if (meta.auth?.provider) {
+    $('loginLink').href = loginHref();
+    $('loginLink').classList.remove('hidden');
+  }
+  if (meta.accessMode === 'key' && !me) {
     $('accessKey').value = store.get('noai.key') || '';
     if (mobile.matches) { $('keyToggle').classList.remove('hidden'); showKeyBox(!store.get('noai.key')); }
     else showKeyBox(true);
@@ -262,9 +273,32 @@ function setBusy(on) {
   $('runMobile').textContent = on ? '处理中…' : '去 AI 味';
 }
 
+function showQuota(q) {
+  const box = $('quotaInfo');
+  if (!q) { box.classList.add('hidden'); return; }
+  box.textContent = q.remaining > 0 ? `拾间 AI 今日剩 ${q.remaining} 次` : `今日额度已用完${q.points > 0 ? `，剩 ${q.points} 点` : ''}`;
+  box.title = `每 3000 字算 1 次；日额度 ${q.dailyQuota} 次，用完扣点数`;
+  box.classList.remove('hidden');
+}
+
+async function refreshQuota() {
+  if (!me) return;
+  const r = await fetch('/api/me').then((x) => x.json()).catch(() => null);
+  if (r) showQuota(r.quota);
+}
+
+function loginHref() {
+  return `${meta?.auth?.loginUrl ?? '/auth/login'}?next=${encodeURIComponent(location.pathname)}`;
+}
+
 async function run() {
   const text = $('input').value.trim();
   if (!text || running) return;
+  if (meta.accessMode === 'cpu' && !me) {
+    // 草稿已经存在本地，登录回来还在
+    location.href = loginHref();
+    return;
+  }
   openSheet(false);
   hidePop();
   setBusy(true);
@@ -296,6 +330,7 @@ async function run() {
   } finally {
     clearInterval(tick);
     setBusy(false);
+    refreshQuota();
   }
 }
 
@@ -521,6 +556,10 @@ for (const b of $('inTabs').children) b.addEventListener('click', () => {
   else hidePop();
 });
 for (const b of $('outTabs').children) b.addEventListener('click', () => switchTabs('outTabs', { out: 'output', diff: 'diff', info: 'info' }, b.dataset.v));
+$('logoutBtn').addEventListener('click', async () => {
+  await fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+});
 $('copy').addEventListener('click', async () => {
   if (!lastResult) return;
   try { await navigator.clipboard.writeText(lastResult.output); $('copy').textContent = '已复制'; } catch { $('copy').textContent = '复制失败'; }
@@ -542,6 +581,13 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { hidePop(); openSheet(false); $('adv').classList.add('hidden'); }
 });
 window.addEventListener('resize', hidePop);
+
+const loginError = new URLSearchParams(location.search).get('login_error');
+if (loginError) {
+  $('output').classList.remove('empty');
+  $('output').replaceChildren(el('div', { class: 'notice bad', text: loginError }));
+  history.replaceState(null, '', location.pathname);
+}
 
 init().catch((e) => {
   $('output').classList.remove('empty');

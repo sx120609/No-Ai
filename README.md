@@ -55,6 +55,14 @@
 
 实测（2026-10，经 OpenAI 兼容中转网关）：改写用 `gemini-4-argon`、审校用 `qwen3.8-max` 效果最好。中改单篇约 1.5–2.5 分钟（几乎全是模型本身的耗时），小改约 10 秒。`gemini-3.1-pro-preview` 已在该网关下线。
 
+## 接入药大拾间
+
+配置 `CPUTIME_SECRET`（与主站 `NOAI_INTEGRATION_SECRET` 相同，至少 32 位）和 `PUBLIC_URL` 后：
+
+- **登录**：用药大拾间账号登录（OAuth 授权码 + PKCE，与拾间支付相同；拿到身份后立即吊销主站 token，本地只保留自己的会话 cookie）。主站管理员自动成为后台管理员。`ACCESS_MODE=cpu` 时改写必须登录，检测不用。
+- **模型**：自动加入「药大拾间 AI」供应商，走主站后台「拾间 AI 对话」线路，模型在主站后台统一配置。
+- **额度**：每次改写按篇幅扣拾间 AI 额度（每 3000 字 1 次，最多 8 次；日额度用完扣点数）。原文不像 AI、没调用模型的不扣；模型一次都没成功则退回。
+
 ## 运行
 
 需要 Node 23.6+（直接运行 TypeScript，无构建步骤）。
@@ -101,7 +109,7 @@ bash deploy/install.sh /path/to/no-ai-<sha>.tar.gz
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `ACCESS_MODE` | `key` | `key` 需要访问密钥；`open` 任何人可用，按 IP 限额 |
+| `ACCESS_MODE` | `key` | `cpu` 用药大拾间账号登录；`key` 需要访问密钥；`open` 任何人可用，按 IP 限额 |
 | `ADMIN_TOKEN` | 自动生成 | 管理员令牌，库里只存哈希 |
 | `ALLOW_BYO` | `0` | 允许请求自带 API Key（只允许 https 公网地址） |
 | `MAX_INPUT_CHARS` | 20000 | 单次字数上限 |
@@ -109,6 +117,10 @@ bash deploy/install.sh /path/to/no-ai-<sha>.tar.gz
 | `OPEN_DAILY_CHARS` | 20000 | open 模式下每个 IP 每日字数 |
 | `MAX_CONCURRENT` / `MAX_QUEUE` | 4 / 20 | 并发与排队上限 |
 | `STORE_RESULTS_HOURS` | 0 | 保存改写正文的小时数，0 只留统计 |
+| `CPUTIME_SECRET` | 空 | 药大拾间集成密钥；为空时不启用登录与主站 AI |
+| `PUBLIC_URL` | 空 | 对外地址，如 `https://noai.cputime.cn`，用于登录回调 |
+| `CPUTIME_ORIGIN` | `https://cputime.cn` | 主站地址 |
+| `USER_DAILY_CHARS` | 0 | 登录用户在 No-AI 侧的每日字数上限（0 不限，以拾间 AI 额度为准） |
 | `TRUST_PROXY` | `0` | 反代后面设为 1，按 X-Real-IP（或 X-Forwarded-For 最后一段）识别 IP |
 
 ## API

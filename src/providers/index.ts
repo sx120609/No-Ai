@@ -19,6 +19,7 @@ export const PROVIDER_PRESETS: { type: ProviderConfig['type']; name: string; bas
   { type: 'openai', name: '中转网关（OpenAI 兼容）', baseUrl: '', models: [] },
   { type: 'openai', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: [] },
   { type: 'openai', name: 'Ollama（本地）', baseUrl: 'http://127.0.0.1:11434/v1', models: [] },
+  { type: 'cputime', name: '药大拾间 AI（主站线路）', models: ['assistant'] },
   { type: 'mock', name: '离线演示（规则改写）', models: ['rules'] },
 ];
 
@@ -38,6 +39,8 @@ export function createClient(p: ProviderConfig): LLMClient {
       return createGeminiClient(p, key);
     case 'mock':
       return createMockClient(p);
+    case 'cputime':
+      throw new Error('药大拾间 AI 由服务端按登录用户创建');
     default:
       throw new Error(`未知的供应商类型：${(p as ProviderConfig).type}`);
   }

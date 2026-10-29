@@ -97,6 +97,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--ink); marg
 .opts select:hover { border-color: var(--rule-2); }
 .bar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; white-space: nowrap; }
 .keybox { display: flex; gap: 6px; align-items: center; }
+.userbox-name { color: var(--ink-2); max-width: 10em; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
 .keybox input { width: 170px; min-height: 28px; }
 .sheet-head-m, .sheet-done { display: none; }
 

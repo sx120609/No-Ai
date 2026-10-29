@@ -4,7 +4,7 @@ export type Lang = 'zh' | 'en';
 
 // ---------- 供应商 ----------
 
-export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'mock';
+export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'mock' | 'cputime';
 
 export interface ProviderConfig {
   id: string;
