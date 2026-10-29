@@ -104,7 +104,7 @@ export function createCputimeClient(provider: ProviderConfig, c: CputimeConfig, 
     provider,
     async chat(req: ChatRequest): Promise<ChatResult> {
       const started = Date.now();
-      const signals = [AbortSignal.timeout(provider.timeoutMs ?? 300_000)];
+      const signals = [AbortSignal.timeout(provider.timeoutMs ?? 600_000)];
       if (req.signal) signals.push(req.signal);
       // 主站接口只接受 system / user / assistant 三种角色，消息数有上限
       const messages = req.messages.slice(-12).map((m) => ({ role: m.role, content: m.content.slice(0, 60_000) }));
