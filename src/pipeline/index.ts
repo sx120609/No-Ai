@@ -70,14 +70,15 @@ export async function runPipeline(
   const base = cleanedOk ? cleaned.text : text;
   if (cleaned.changes) emit({ type: 'cleanup', text: base, changes: cleaned.changes });
 
-  const skip = (opts.skipIfClean ?? true) && before.score < 15 && !opts.instructions;
+  // 原文已经很干净时跳过模型（避免越改越刻意）；选了「重写」说明用户就是要整段重来，照常调用模型
+  const skip = (opts.skipIfClean ?? true) && strength !== 'deep' && before.score < 15 && !opts.instructions;
   if (skip) {
     const after = detect(base, lang);
     emit({ type: 'detect', which: 'after', report: after });
     const result: RewriteResult = {
       id, input: text, output: base, lang, before, after, facts, candidates: [], chosen: null,
       passed: true, skipped: true, chunks: 0,
-      warnings: ['原文 AI 味已经很低，只做了确定性清理，没有调用模型（避免越改越刻意）'],
+      warnings: ['原文 AI 味已经很低，只做了确定性清理，没有调用模型（避免越改越刻意）；确实要改就选「重写」'],
       elapsedMs: Date.now() - started, usage,
     };
     emit({ type: 'done', result });

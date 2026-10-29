@@ -500,6 +500,46 @@ export const EN_PATTERNS: PatternDef[] = [
     re: /\b(?:a (?:rich|vibrant|complex) tapestry|symphony of|a beacon of|the cornerstone of|a melting pot|treasure trove|double-edged sword)\b/gi,
     advice: 'Cut decorative metaphors.',
   },
+  // ---- 学术摘要/研究计划腔：单个不算问题，扎堆出现就是模型写的 ----
+  {
+    id: 'en.acad.gap', lang: 'en', category: 'template', label: '"While existing studies… it is still…"', severity: 2,
+    re: /\b(?:while|although|though) (?:existing|previous|prior|current|recent|many) (?:studies|research|work|literature|reports)\b[^.;]{0,160}?,\s*(?:it|they|this|there) (?:is|are|remains?) (?:still )?/gi,
+    advice: 'The concede-then-gap sentence is a stock template; state the gap directly and say which studies.',
+  },
+  {
+    id: 'en.acad.vague-gap', lang: 'en', category: 'filler', label: 'Vague gap ("not well-developed in certain aspects")', severity: 2,
+    re: /\b(?:(?:is|are|remains?) (?:still )?(?:underdeveloped|under-?explored|in its infancy)|(?:is|are|remains?) (?:still )?not (?:yet )?(?:well[- ]developed|well[- ]established|fully (?:understood|explored|elucidated|addressed))|in (?:certain|several|some|many|various) aspects(?:,? such as)?)\b/gi,
+    advice: 'Name the specific missing piece instead of a vague gap.',
+  },
+  {
+    id: 'en.acad.foundation', lang: 'en', category: 'inflate', label: '"providing a foundation for"', severity: 2,
+    re: /\b(?:provid(?:e|es|ed|ing)|lay(?:s|ing)?|laid|establish(?:es|ed|ing)?|offer(?:s|ed|ing)?) (?:a |the )?(?:solid |strong |theoretical |scientific |firm )?(?:foundation|basis|groundwork|reference) for (?:future |further |subsequent )?/gi,
+    advice: 'Say what the result lets someone actually do next, or cut the wrap-up.',
+  },
+  {
+    id: 'en.acad.future', lang: 'en', category: 'inflate', label: '"Future work could focus on"', severity: 1,
+    weak: true,
+    re: /\bfuture (?:work|research|studies|efforts|investigations) (?:could|should|may|might|will|need to) (?:focus on|explore|address|investigate|aim to)\b/gi,
+    advice: 'Fine once; in a block of stock phrases, make it a concrete next step.',
+  },
+  {
+    id: 'en.acad.potential', lang: 'en', category: 'buzz', label: '"show potential / hold promise"', severity: 1,
+    weak: true,
+    re: /\b(?:show(?:s|ed|n|ing)?|hold(?:s|ing)?|demonstrat(?:e|es|ed|ing)|exhibit(?:s|ed|ing)?) (?:great |significant |promising |considerable |tremendous |immense )?(?:potential|promise) (?:in|for|as)\b/gi,
+    advice: 'Give the actual finding instead of "potential".',
+  },
+  {
+    id: 'en.acad.method-opener', lang: 'en', category: 'template', label: '"By reviewing the literature…"', severity: 1,
+    weak: true,
+    re: /\b(?:by (?:systematically )?(?:reviewing|analy[sz]ing|examining|summari[sz]ing|integrating) (?:the )?(?:existing |relevant |recent )?(?:literature|studies|research|evidence)|I would like to (?:evaluate|explore|investigate|examine|discuss|study))\b/gi,
+    advice: 'Lead with what you will do and on what, not with the method signpost.',
+  },
+  {
+    id: 'en.acad.limited-by', lang: 'en', category: 'template', label: '"…, yet X is limited by"', severity: 1,
+    weak: true,
+    re: /,\s*(?:yet|but|however,?) (?:its |their |the )?(?:clinical )?(?:translation|application|use|adoption|development) (?:is|are|remains?) (?:still )?(?:limited|hindered|hampered|constrained|restricted) by\b/gi,
+    advice: 'Promise-then-limitation is the default AI opener; pick the one limitation that matters.',
+  },
 ];
 
 export function patternsFor(lang: Lang): PatternDef[] {

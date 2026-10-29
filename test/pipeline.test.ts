@@ -136,3 +136,9 @@ test('pipeline repairs a candidate that dropped a fact', async () => {
   assert.ok(r.output.includes('128'));
   assert.ok(r.candidates[0]!.problems.some((p) => p.includes('128')));
 });
+
+test('choosing 重写 still calls the model on clean text', async () => {
+  const r = await runPipeline(HUMAN_ZH, { strength: 'deep' }, mockDeps);
+  assert.equal(r.skipped, false);
+  assert.ok(r.usage.calls >= 1);
+});

@@ -98,7 +98,11 @@ const STYLE_EN = `[Style]
 - No markdown bold, headings, bullet lists or emoji unless the source is a list that must stay.
 - Do not perform casualness or invent emotion.
 - If a sentence is already natural, keep it. Do not change things just to look rewritten.
-- Do not do list-based word swapping. Ordinary words like "improve" or "significant" are fine once or twice; only fix clusters, by cutting, merging or making them concrete, never by rotating synonyms. Use one plain word for one idea throughout.`;
+- Do not do list-based word swapping. Ordinary words like "improve" or "significant" are fine once or twice; only fix clusters, by cutting, merging or making them concrete, never by rotating synonyms. Use one plain word for one idea throughout.
+- Paraphrasing a stock sentence keeps it a stock sentence. "Existing studies show X; however, several aspects remain underdeveloped" reworded is still the template: name the actual gap in the first clause, or merge it into the sentence that uses it.
+- When the source lists items, keep every item but do not force them into a tidy parallel run ("its A, its B, the C, and the D"); group the two that belong together, or give one its own clause where the source says why it matters.
+- Not every sentence should open with its subject and close on a neat summary. Let some start from a condition or the object, let one run long with a parenthetical, keep one short. Do not end a paragraph on a purpose-restating wrap-up ("as groundwork for", "providing a foundation for"); stop at the last concrete point.
+- Plain, slightly uneven phrasing beats polished phrasing. Avoid transitions used only for rhythm ("though", "That said", "In turn").`;
 
 export interface PromptInput {
   lang: Lang;

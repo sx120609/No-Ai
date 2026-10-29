@@ -53,3 +53,13 @@ test('CJK-latin spacing is flagged', () => {
   const r = detect('我们用 Excel 做了一个 3 列的表，然后导出成 PDF 给财务看，财务说格式还行，就是字太小了看不清楚。');
   assert.ok(r.hits.some((h) => h.id === 'zh.punct.cjk-space'));
 });
+
+test('stock research-proposal phrasing in English is caught when it clusters', () => {
+  const proposal = 'MSC therapy shows potential in preclinical models, yet translation is limited by donor heterogeneity. I would like to evaluate the secretome. By reviewing the literature over the past five years, I would compare its proteins and vesicles. While existing studies indicate that the secretome is effective, it is still not well-developed in certain aspects such as quality control. Future work could focus on quality metrics, providing a foundation for preclinical development.';
+  const r = detect(proposal, 'en');
+  assert.ok(r.score >= 30, `score ${r.score}`);
+  assert.ok(r.hits.some((h) => h.id === 'en.acad.gap' && h.actionable));
+  // 单独一句正常的学术表述不算问题
+  const one = detect('Future work could focus on the dose-response curve we did not measure in the 2019 cohort, since only two doses were tested.', 'en');
+  assert.ok(one.hits.every((h) => !h.actionable));
+});

@@ -60,18 +60,20 @@ export function findHits(text: string, lang: Lang): PatternHit[] {
 /**
  * 弱信号/词表类命中的处理预算：
  * - 同一规则每 500 字允许 2 次正常使用；
- * - 或者 ±80 字范围内有另外 2 个以上弱/词表类命中（扎堆）才算需要处理。
+ * - 或者 ±80 字（英文 ±250 字符）范围内有另外 2 个以上弱/词表类命中（扎堆）才算需要处理。
  */
 function markActionable(hits: PatternHit[], text: string, lang: Lang) {
   const soft = hits.filter((h) => h.weak || h.clarity);
   if (!soft.length) return;
   const units = Math.max(1, unitLength(text, lang) / (lang === 'zh' ? 500 : 100));
   const budget = Math.max(2, Math.round(2 * units));
+  // 英文同样的意思占的字符多，扎堆窗口按 ±250 字符算
+  const win = lang === 'zh' ? 80 : 250;
   const byId = new Map<string, PatternHit[]>();
   for (const h of soft) byId.set(h.id, [...(byId.get(h.id) ?? []), h]);
   for (const h of soft) {
     const overBudget = byId.get(h.id)!.length > budget;
-    const neighbors = soft.filter((o) => o !== h && Math.abs(o.start - h.start) <= 80).length;
+    const neighbors = soft.filter((o) => o !== h && Math.abs(o.start - h.start) <= win).length;
     h.actionable = overBudget || neighbors >= 2;
   }
 }
