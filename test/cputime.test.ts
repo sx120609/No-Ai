@@ -50,7 +50,8 @@ before(async () => {
       if (failChat) { res.writeHead(502); return void res.end('{}'); }
       const src = body.messages.at(-1).content.match(/<source_text>\n([\s\S]*?)\n<\/source_text>/)?.[1] ?? '';
       const out = src.replace(/值得注意的是，|总而言之，|首先，|其次，|最后，/g, '').replace(/这不仅仅是技术的进步，而是一场/, '这是一场');
-      return ok(res, { content: `<rewritten>\n${out}\n</rewritten>`, model: 'assistant-model' });
+      // 模拟主站线路把换行转义成字面 \n 返回
+      return ok(res, { content: `<rewritten>\n${out}\n</rewritten>`.replace(/\n/g, '\\n'), model: 'assistant-model' });
     }
     res.writeHead(404); res.end('{}');
   });
@@ -124,6 +125,7 @@ test('rewrite goes through the main-site AI line and charges quota once per job'
   assert.equal(r.status, 200);
   const j = await r.json();
   assert.ok(!j.output.includes('值得注意的是'));
+  assert.ok(j.output.includes('\n') && !j.output.includes('\\n'), 'escaped newlines are restored');
   assert.equal(lastChat.userId, 42);
   assert.equal(lastChat.messages[0].role, 'system');
   assert.equal(used, 1);

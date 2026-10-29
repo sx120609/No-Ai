@@ -118,7 +118,9 @@ export function createCputimeClient(provider: ProviderConfig, c: CputimeConfig, 
         const status = (err as { status?: number }).status;
         throw new ProviderError(`药大拾间 AI：${(err as Error).message}`, { status, retryable: !status || status >= 500 });
       }
-      const text = String(r.data?.content ?? '');
+      let text = String(r.data?.content ?? '');
+      // 主站线路有时把换行以转义文本返回（字面的 \n），没有真换行时还原
+      if (!text.includes('\n') && /\\[nr]/.test(text)) text = text.replace(/\\r\\n|\\n|\\r/g, '\n').replace(/\\t/g, '\t');
       if (!text.trim()) throw new ProviderError('药大拾间 AI 返回空内容', { retryable: true });
       return { text, model: String(r.data?.model || 'cputime'), latencyMs: Date.now() - started };
     },
